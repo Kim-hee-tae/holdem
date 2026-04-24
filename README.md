@@ -13,7 +13,7 @@
   - **토너먼트 모드**(탈락, 최종 1인 우승)
 - 족보 판정 엔진(7장 중 최적 5장 선택)
 - 간단한 **데스크톱 GUI(Tkinter)**: 핸드 단위 진행 로그 확인
-- 간단한 **웹 GUI(Flask)**: 웹에서 핸드 진행 및 상태 확인
+- **FastAPI + SPA 웹 GUI**: 웹에서 액션 선택 후 핸드 진행/상태 확인
 
 ## CLI 실행
 ```bash
@@ -28,6 +28,11 @@ python holdem.py --gui
 python holdem.py --web
 ```
 
+> `--web` 모드는 `fastapi`, `uvicorn` 설치가 필요합니다.
+> ```bash
+> pip install fastapi uvicorn
+> ```
+
 ## 테스트
 ```bash
 python -m pytest -q
@@ -36,4 +41,4 @@ python -m pytest -q
 ## 확장 아이디어
 - 사람 플레이어의 실시간 입력(콘솔/웹)
 - 사이드팟/정교한 올인 처리
-- 웹 GUI를 FastAPI + SPA 구조로 고도화
+- 웹소켓 기반 턴 단위 실시간 액션 입력으로 확장

@@ -311,8 +311,6 @@ class TexasHoldemGame:
             scored.append((p, score))
             self._log(f"{p.name}: {self.format_cards(p.hole_cards)} -> {HAND_NAMES[score[0]]}")
 
-        best = max(score for _, score in scored)
-        winners = [p for p, sc in scored if sc == best]
         side_pot_winners = self._distribute_side_pots(scored)
         return side_pot_winners
 
@@ -549,65 +547,16 @@ def parse_args() -> argparse.Namespace:
 
 def launch_web_gui(seed: int | None = None) -> None:
     try:
-        from flask import Flask, redirect, render_template_string, request, url_for
+        import uvicorn
     except ModuleNotFoundError as exc:
         raise RuntimeError(
-            "Flask is required for --web mode. Install with: pip install flask"
+            "FastAPI web mode requires uvicorn and fastapi. Install with: pip install fastapi uvicorn"
         ) from exc
 
-    app = Flask(__name__)
-    game = TexasHoldemGame(["You", "Bot1", "Bot2", "Bot3"], seed=seed, human_player="You")
+    from webapp.main import create_app
 
-    template = """
-    <html><body>
-    <h2>Texas Hold'em Web GUI</h2>
-    <p>현재 핸드 단위 실행이며, 콘솔 없이 웹에서 액션 스타일을 선택해 진행할 수 있습니다.</p>
-    <form method="post" action="/play">
-      <label>행동 기본값:
-      <select name="style">
-        <option value="call">Call/Check 중심</option>
-        <option value="raise">Raise 중심</option>
-        <option value="fold">Fold 중심</option>
-      </select></label>
-      <button type="submit">다음 핸드 실행</button>
-    </form>
-    <pre>{{logs}}</pre>
-    <p><b>Standings:</b> {{standings}}</p>
-    </body></html>
-    """
-
-    @app.get("/")
-    def index():
-        return render_template_string(template, logs="웹 GUI 준비 완료", standings=game.standings())
-
-    @app.post("/play")
-    def play():
-        style = request.form.get("style", "call")
-        original = game._prompt_human_action
-
-        def scripted_prompt(player: Player, to_call: int) -> tuple[Action, int]:
-            if style == "fold" and to_call > 0:
-                return "fold", 0
-            if style == "raise" and player.chips > game.current_bet + game.config.big_blind:
-                return "raise", game.current_bet + game.config.big_blind
-            if to_call == 0:
-                return "check", 0
-            return "call", 0
-
-        game._prompt_human_action = scripted_prompt  # type: ignore[assignment]
-        game.play_hand()
-        game._prompt_human_action = original  # type: ignore[assignment]
-        return redirect(url_for("state"))
-
-    @app.get("/state")
-    def state():
-        return render_template_string(
-            template,
-            logs="\\n".join(game.logs),
-            standings=game.standings(),
-        )
-
-    app.run(host="0.0.0.0", port=8000, debug=False)
+    app = create_app(seed=seed)
+    uvicorn.run(app, host="0.0.0.0", port=8000, log_level="info")
 
 
 def main() -> None:

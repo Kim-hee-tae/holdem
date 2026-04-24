@@ -1,0 +1,53 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Texas Hold'em SPA</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; }
+    .row { display: flex; gap: 8px; margin-bottom: 12px; }
+    button { padding: 8px 12px; }
+    pre { background:#111; color:#eaeaea; padding:12px; border-radius:8px; height: 360px; overflow:auto; }
+    .chips { margin: 10px 0; }
+  </style>
+</head>
+<body>
+  <h2>Texas Hold'em (FastAPI + SPA)</h2>
+  <p>웹에서 사람 플레이어 액션을 선택해 다음 핸드를 진행합니다.</p>
+
+  <div class="row">
+    <button onclick="play('fold')">Fold 스타일</button>
+    <button onclick="play('call')">Call/Check 스타일</button>
+    <button onclick="play('raise')">Raise 스타일</button>
+  </div>
+
+  <div class="chips" id="standings"></div>
+  <pre id="logs">Loading...</pre>
+
+  <script>
+    async function refresh() {
+      const res = await fetch('/api/state');
+      const data = await res.json();
+      render(data);
+    }
+
+    async function play(action) {
+      const res = await fetch('/api/play', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ action })
+      });
+      const data = await res.json();
+      render(data);
+    }
+
+    function render(data) {
+      document.getElementById('standings').textContent = `Hand #${data.hand_no} | ${data.standings}`;
+      document.getElementById('logs').textContent = data.logs.join('\n');
+    }
+
+    refresh();
+  </script>
+</body>
+</html>
