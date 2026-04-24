@@ -3,40 +3,109 @@
 <head>
   <meta charset="UTF-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-  <title>Texas Hold'em SPA (WebSocket)</title>
+  <title>Texas Hold'em SPA (Visual Cards)</title>
   <style>
-    body { font-family: Arial, sans-serif; margin: 20px; }
+    body { font-family: Arial, sans-serif; margin: 20px; background: #0b5d2a; color: #fff; }
+    h2 { margin-top: 0; }
+    .table { background: #146b36; border-radius: 16px; padding: 16px; box-shadow: inset 0 0 20px #0a3; }
     .row { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
-    button { padding: 8px 12px; }
-    pre { background:#111; color:#eaeaea; padding:12px; border-radius:8px; height: 380px; overflow:auto; }
-    .chips { margin: 10px 0; }
-    #prompt { margin: 8px 0; color: #0a58ca; }
+    button { padding: 8px 12px; border-radius: 8px; border: 0; cursor: pointer; }
+    #prompt { margin: 8px 0; color: #ffe082; font-weight: 700; }
+    .info { margin: 8px 0; }
+    .card-row { display: flex; gap: 8px; flex-wrap: wrap; min-height: 92px; align-items: center; }
+    .card {
+      width: 58px; height: 84px; background: #fff; color: #111; border-radius: 8px;
+      border: 1px solid #ddd; display: flex; flex-direction: column; justify-content: space-between;
+      padding: 6px; box-sizing: border-box; font-weight: 700;
+    }
+    .card .mid { text-align: center; font-size: 22px; line-height: 1; }
+    .red { color: #d32f2f; }
+    .black { color: #111; }
+    .back {
+      background: repeating-linear-gradient(45deg, #1e3a8a, #1e3a8a 6px, #2563eb 6px, #2563eb 12px);
+      color: transparent; border: 1px solid #cfd8dc;
+    }
+    .section { margin: 12px 0; }
+    .players { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+    .player-box { background: rgba(0,0,0,0.2); border-radius: 10px; padding: 10px; }
+    pre { background:#111; color:#eaeaea; padding:12px; border-radius:8px; height: 220px; overflow:auto; }
   </style>
 </head>
 <body>
-  <h2>Texas Hold'em (FastAPI + SPA + WebSocket)</h2>
-  <p>턴 단위로 사람 플레이어 액션을 전송합니다.</p>
+  <h2>Texas Hold'em (실제 카드 형태 UI)</h2>
+  <div class="table">
+    <div id="prompt"></div>
 
-  <div id="prompt"></div>
-  <div class="row">
-    <button onclick="sendAction('fold')">Fold</button>
-    <button onclick="sendAction('check')">Check</button>
-    <button onclick="sendAction('call')">Call</button>
-    <button onclick="sendAction('raise')">Raise</button>
-    <button onclick="sendAction('next_round')">Next Round</button>
+    <div class="row">
+      <button onclick="sendAction('fold')">Fold</button>
+      <button onclick="sendAction('check')">Check</button>
+      <button onclick="sendAction('call')">Call</button>
+      <button onclick="sendAction('raise')">Raise</button>
+      <button onclick="sendAction('next_round')">Next Round</button>
+    </div>
+
+    <div class="info" id="standings"></div>
+
+    <div class="section">
+      <strong>커뮤니티 카드</strong>
+      <div class="card-row" id="boardCards"></div>
+    </div>
+
+    <div class="section">
+      <strong>내 카드</strong>
+      <div class="card-row" id="myCards"></div>
+    </div>
+
+    <div class="section">
+      <strong>플레이어 카드</strong>
+      <div class="players" id="playersArea"></div>
+    </div>
+
+    <pre id="logs">Connecting...</pre>
   </div>
-
-  <div id="mycards"></div>
-  <div class="chips" id="standings"></div>
-  <div id="revealed"></div>
-  <pre id="logs">Connecting...</pre>
 
   <script>
     const logsEl = document.getElementById('logs');
     const standingsEl = document.getElementById('standings');
     const promptEl = document.getElementById('prompt');
-    const myCardsEl = document.getElementById('mycards');
-    const revealedEl = document.getElementById('revealed');
+    const myCardsEl = document.getElementById('myCards');
+    const boardCardsEl = document.getElementById('boardCards');
+    const playersAreaEl = document.getElementById('playersArea');
+
+    const SUIT = { S: '♠', H: '♥', D: '♦', C: '♣' };
+    const RED = new Set(['H', 'D']);
+
+    function parseCard(card) {
+      if (!card) return null;
+      const rank = card.slice(0, card.length - 1);
+      const suit = card.slice(-1);
+      return { rank, suit };
+    }
+
+    function cardEl(card, faceUp = true) {
+      const div = document.createElement('div');
+      div.className = 'card';
+      if (!faceUp) {
+        div.classList.add('back');
+        div.innerHTML = '<div>■</div><div class="mid">■</div><div style="text-align:right">■</div>';
+        return div;
+      }
+      const c = parseCard(card);
+      if (!c) return div;
+      const colorClass = RED.has(c.suit) ? 'red' : 'black';
+      div.classList.add(colorClass);
+      div.innerHTML = `
+        <div>${c.rank}${SUIT[c.suit]}</div>
+        <div class="mid">${SUIT[c.suit]}</div>
+        <div style="text-align:right">${c.rank}${SUIT[c.suit]}</div>
+      `;
+      return div;
+    }
+
+    function renderCards(container, cards, faceUp = true) {
+      container.innerHTML = '';
+      (cards || []).forEach((c) => container.appendChild(cardEl(c, faceUp)));
+    }
 
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/ws`);
@@ -59,22 +128,46 @@
       ws.send(JSON.stringify({ action }));
     }
 
+    function renderPlayers(data) {
+      playersAreaEl.innerHTML = '';
+      const revealed = data.revealed_cards || {};
+      (data.players || []).forEach((p) => {
+        const box = document.createElement('div');
+        box.className = 'player-box';
+        const title = document.createElement('div');
+        title.textContent = `${p.name} | chips=${p.chips}${p.folded ? ' (fold)' : ''}${p.all_in ? ' (all-in)' : ''}`;
+        box.appendChild(title);
+
+        const row = document.createElement('div');
+        row.className = 'card-row';
+
+        if (p.name === 'You') {
+          (data.you_cards || []).forEach((c) => row.appendChild(cardEl(c, true)));
+        } else if (data.event === 'hand_finished' && revealed[p.name]) {
+          revealed[p.name].forEach((c) => row.appendChild(cardEl(c, true)));
+        } else {
+          row.appendChild(cardEl(null, false));
+          row.appendChild(cardEl(null, false));
+        }
+
+        box.appendChild(row);
+        playersAreaEl.appendChild(box);
+      });
+    }
+
     function render(data) {
       standingsEl.textContent = `Phase: ${data.phase} | Pot: ${data.pot} | ${data.standings}`;
       logsEl.textContent = (data.logs || []).join('\n');
-      myCardsEl.textContent = `내 카드: ${(data.you_cards || []).join(' ')}`;
+      renderCards(myCardsEl, data.you_cards || [], true);
+      renderCards(boardCardsEl, data.board_cards || [], true);
+      renderPlayers(data);
+
       if (data.event === 'action_required' && data.prompt) {
         promptEl.textContent = `${data.prompt.player} 차례 - to_call: ${data.prompt.to_call}, allowed: ${data.prompt.allowed.join(', ')}`;
-        revealedEl.textContent = '';
       } else if (data.event === 'hand_finished') {
-        promptEl.textContent = `핸드 종료: winners=${(data.winners || []).join(', ')}`;
-        if (data.revealed_cards) {
-          const lines = Object.entries(data.revealed_cards).map(([name, cards]) => `${name}: ${cards.join(' ')}`);
-          revealedEl.textContent = `플레이어 카드 공개\n${lines.join('\n')}`;
-        }
+        promptEl.textContent = `핸드 종료: winners=${(data.winners || []).join(', ')} | Next Round 클릭`;
       } else {
         promptEl.textContent = '';
-        revealedEl.textContent = '';
       }
     }
   </script>

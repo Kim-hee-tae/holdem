@@ -72,6 +72,7 @@ class TurnEngine:
             "phase": self.phase,
             "pot": self.game.pot,
             "board": self.game.format_cards(self.game.board),
+            "board_cards": [str(c) for c in self.game.board],
             "logs": self.game.logs,
             "standings": self.game.standings(),
             "players": [
