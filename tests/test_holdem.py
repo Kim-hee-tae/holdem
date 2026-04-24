@@ -94,3 +94,14 @@ def test_side_pot_distribution_with_all_in():
     assert b.chips == start_b + 100
     assert game.pot == 0
     assert {w.name for w in winners} == {"A", "B"}
+
+
+def test_showdown_logs_reveal_all_hole_cards():
+    game = TexasHoldemGame(["A", "B"], seed=5)
+    game.start_hand()
+    # Force immediate end by folding one player.
+    game.players[1].folded = True
+    game.showdown_or_award()
+    joined = "\n".join(game.logs)
+    assert "Hole cards reveal:" in joined
+    assert "A:" in joined and "B:" in joined

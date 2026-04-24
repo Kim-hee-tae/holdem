@@ -23,15 +23,20 @@
     <button onclick="sendAction('check')">Check</button>
     <button onclick="sendAction('call')">Call</button>
     <button onclick="sendAction('raise')">Raise</button>
+    <button onclick="sendAction('next_round')">Next Round</button>
   </div>
 
+  <div id="mycards"></div>
   <div class="chips" id="standings"></div>
+  <div id="revealed"></div>
   <pre id="logs">Connecting...</pre>
 
   <script>
     const logsEl = document.getElementById('logs');
     const standingsEl = document.getElementById('standings');
     const promptEl = document.getElementById('prompt');
+    const myCardsEl = document.getElementById('mycards');
+    const revealedEl = document.getElementById('revealed');
 
     const proto = location.protocol === 'https:' ? 'wss' : 'ws';
     const ws = new WebSocket(`${proto}://${location.host}/ws`);
@@ -57,12 +62,19 @@
     function render(data) {
       standingsEl.textContent = `Phase: ${data.phase} | Pot: ${data.pot} | ${data.standings}`;
       logsEl.textContent = (data.logs || []).join('\n');
+      myCardsEl.textContent = `내 카드: ${(data.you_cards || []).join(' ')}`;
       if (data.event === 'action_required' && data.prompt) {
         promptEl.textContent = `${data.prompt.player} 차례 - to_call: ${data.prompt.to_call}, allowed: ${data.prompt.allowed.join(', ')}`;
+        revealedEl.textContent = '';
       } else if (data.event === 'hand_finished') {
         promptEl.textContent = `핸드 종료: winners=${(data.winners || []).join(', ')}`;
+        if (data.revealed_cards) {
+          const lines = Object.entries(data.revealed_cards).map(([name, cards]) => `${name}: ${cards.join(' ')}`);
+          revealedEl.textContent = `플레이어 카드 공개\n${lines.join('\n')}`;
+        }
       } else {
         promptEl.textContent = '';
+        revealedEl.textContent = '';
       }
     }
   </script>

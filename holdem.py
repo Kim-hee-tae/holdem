@@ -298,6 +298,9 @@ class TexasHoldemGame:
 
     def showdown_or_award(self) -> list[Player]:
         remain = [p for p in self.players if not p.folded]
+        self._log("Hole cards reveal:")
+        for p in self.players:
+            self._log(f" - {p.name}: {self.format_cards(p.hole_cards)}")
         if len(remain) == 1:
             winner = remain[0]
             winner.chips += self.pot

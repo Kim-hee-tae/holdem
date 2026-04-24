@@ -12,8 +12,11 @@ from holdem import Action, GameConfig, TexasHoldemGame
 
 
 class PlayRequest(BaseModel):
-    action: Literal["fold", "check", "call", "raise"] = "call"
+    action: Literal["fold", "check", "call", "raise", "next_round"] = "call"
     raise_to: int | None = None
+
+
+WebAction = Literal["fold", "check", "call", "raise", "next_round"]
 
 
 class TurnEngine:
@@ -81,6 +84,7 @@ class TurnEngine:
                 }
                 for p in self.game.players
             ],
+            "you_cards": [str(c) for c in self.game.players[self.human_idx].hole_cards],
         }
         data.update(extra)
         return data
@@ -109,7 +113,14 @@ class TurnEngine:
             winners = self.game.showdown_or_award()
             self.game.rotate_dealer()
             self.phase = "finished"
-            return self.snapshot("hand_finished", winners=[w.name for w in winners])
+            return self.snapshot(
+                "hand_finished",
+                winners=[w.name for w in winners],
+                revealed_cards={
+                    p.name: [str(c) for c in p.hole_cards]
+                    for p in self.game.players
+                },
+            )
         return None
 
     def advance_until_human_or_end(self) -> dict:
@@ -118,7 +129,14 @@ class TurnEngine:
                 winners = self.game.showdown_or_award()
                 self.game.rotate_dealer()
                 self.phase = "finished"
-                return self.snapshot("hand_finished", winners=[w.name for w in winners])
+                return self.snapshot(
+                    "hand_finished",
+                    winners=[w.name for w in winners],
+                    revealed_cards={
+                        p.name: [str(c) for c in p.hole_cards]
+                        for p in self.game.players
+                    },
+                )
 
             if not self.round_waiting:
                 changed = self._advance_street()
@@ -178,11 +196,13 @@ class WebSession:
     def state(self) -> dict:
         return self.last_state
 
-    def play_once(self, action: Action, raise_to: int | None) -> dict:
-        self.last_state = self.turn.apply_human_action(action, raise_to)
-        if self.last_state.get("event") == "hand_finished":
-            self.turn.start_hand()
+    def play_once(self, action: WebAction, raise_to: int | None) -> dict:
+        if action == "next_round":
+            self.last_state = self.turn.start_hand()
             self.last_state = self.turn.advance_until_human_or_end()
+            return self.last_state
+
+        self.last_state = self.turn.apply_human_action(action, raise_to)
         return self.last_state
 
 
