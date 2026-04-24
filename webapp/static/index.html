@@ -1,0 +1,194 @@
+<!doctype html>
+<html lang="ko">
+<head>
+  <meta charset="UTF-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+  <title>Texas Hold'em SPA (Visual Cards)</title>
+  <style>
+    body { font-family: Arial, sans-serif; margin: 20px; background: #0b5d2a; color: #fff; }
+    h2 { margin-top: 0; }
+    .table { background: #146b36; border-radius: 16px; padding: 16px; box-shadow: inset 0 0 20px #0a3; }
+    .row { display: flex; gap: 8px; margin-bottom: 12px; flex-wrap: wrap; }
+    button { padding: 8px 12px; border-radius: 8px; border: 0; cursor: pointer; }
+    #prompt { margin: 8px 0; color: #ffe082; font-weight: 700; }
+    .info { margin: 8px 0; }
+    .card-row { display: flex; gap: 8px; flex-wrap: wrap; min-height: 92px; align-items: center; }
+    .card {
+      width: 58px; height: 84px; background: #fff; color: #111; border-radius: 8px;
+      border: 1px solid #ddd; display: flex; flex-direction: column; justify-content: space-between;
+      padding: 6px; box-sizing: border-box; font-weight: 700;
+    }
+    .card .mid { text-align: center; font-size: 22px; line-height: 1; }
+    .red { color: #d32f2f; }
+    .black { color: #111; }
+    .back {
+      background: repeating-linear-gradient(45deg, #1e3a8a, #1e3a8a 6px, #2563eb 6px, #2563eb 12px);
+      color: transparent; border: 1px solid #cfd8dc;
+    }
+    .section { margin: 12px 0; }
+    .players { display: grid; grid-template-columns: repeat(auto-fit, minmax(220px, 1fr)); gap: 10px; }
+    .player-box { background: rgba(0,0,0,0.2); border-radius: 10px; padding: 10px; }
+    pre { background:#111; color:#eaeaea; padding:12px; border-radius:8px; height: 220px; overflow:auto; }
+  </style>
+</head>
+<body>
+  <h2>Texas Hold'em (실제 카드 형태 UI)</h2>
+  <div class="table">
+    <div id="prompt"></div>
+
+    <div class="row">
+      <button id="btn-fold" onclick="sendAction('fold')">Fold</button>
+      <button id="btn-check" onclick="sendAction('check')">Check</button>
+      <button id="btn-call" onclick="sendAction('call')">Call</button>
+      <button id="btn-raise" onclick="sendAction('raise')">Raise</button>
+      <button id="btn-next" onclick="sendAction('next_round')">Next Round</button>
+    </div>
+
+    <div class="info" id="standings"></div>
+
+    <div class="section">
+      <strong>커뮤니티 카드</strong>
+      <div class="card-row" id="boardCards"></div>
+    </div>
+
+    <div class="section">
+      <strong>내 카드</strong>
+      <div class="card-row" id="myCards"></div>
+    </div>
+
+    <div class="section">
+      <strong>플레이어 카드</strong>
+      <div class="players" id="playersArea"></div>
+    </div>
+
+    <pre id="logs">Connecting...</pre>
+  </div>
+
+  <script>
+    const logsEl = document.getElementById('logs');
+    const standingsEl = document.getElementById('standings');
+    const promptEl = document.getElementById('prompt');
+    const myCardsEl = document.getElementById('myCards');
+    const boardCardsEl = document.getElementById('boardCards');
+    const playersAreaEl = document.getElementById('playersArea');
+    const actionButtons = {
+      fold: document.getElementById('btn-fold'),
+      check: document.getElementById('btn-check'),
+      call: document.getElementById('btn-call'),
+      raise: document.getElementById('btn-raise'),
+      next_round: document.getElementById('btn-next'),
+    };
+
+    const SUIT = { S: '♠', H: '♥', D: '♦', C: '♣' };
+    const RED = new Set(['H', 'D']);
+
+    function parseCard(card) {
+      if (!card) return null;
+      const rank = card.slice(0, card.length - 1);
+      const suit = card.slice(-1);
+      return { rank, suit };
+    }
+
+    function cardEl(card, faceUp = true) {
+      const div = document.createElement('div');
+      div.className = 'card';
+      if (!faceUp) {
+        div.classList.add('back');
+        div.innerHTML = '<div>■</div><div class="mid">■</div><div style="text-align:right">■</div>';
+        return div;
+      }
+      const c = parseCard(card);
+      if (!c) return div;
+      const colorClass = RED.has(c.suit) ? 'red' : 'black';
+      div.classList.add(colorClass);
+      div.innerHTML = `
+        <div>${c.rank}${SUIT[c.suit]}</div>
+        <div class="mid">${SUIT[c.suit]}</div>
+        <div style="text-align:right">${c.rank}${SUIT[c.suit]}</div>
+      `;
+      return div;
+    }
+
+    function renderCards(container, cards, faceUp = true) {
+      container.innerHTML = '';
+      (cards || []).forEach((c) => container.appendChild(cardEl(c, faceUp)));
+    }
+
+    const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+    const ws = new WebSocket(`${proto}://${location.host}/ws`);
+
+    ws.onmessage = (event) => {
+      const data = JSON.parse(event.data);
+      render(data);
+    };
+
+    ws.onopen = () => {
+      logsEl.textContent = 'Connected. Waiting for state...';
+    };
+
+    ws.onclose = () => {
+      logsEl.textContent += '\n[Disconnected]';
+    };
+
+    function sendAction(action) {
+      if (ws.readyState !== WebSocket.OPEN) return;
+      ws.send(JSON.stringify({ action }));
+    }
+
+    function renderPlayers(data) {
+      playersAreaEl.innerHTML = '';
+      const revealed = data.revealed_cards || {};
+      (data.players || []).forEach((p) => {
+        const box = document.createElement('div');
+        box.className = 'player-box';
+        const title = document.createElement('div');
+        title.textContent = `${p.name} | chips=${p.chips}${p.folded ? ' (fold)' : ''}${p.all_in ? ' (all-in)' : ''}`;
+        box.appendChild(title);
+
+        const row = document.createElement('div');
+        row.className = 'card-row';
+
+        if (p.name === 'You') {
+          (data.you_cards || []).forEach((c) => row.appendChild(cardEl(c, true)));
+        } else if (data.event === 'hand_finished' && revealed[p.name]) {
+          revealed[p.name].forEach((c) => row.appendChild(cardEl(c, true)));
+        } else {
+          row.appendChild(cardEl(null, false));
+          row.appendChild(cardEl(null, false));
+        }
+
+        box.appendChild(row);
+        playersAreaEl.appendChild(box);
+      });
+    }
+
+    function render(data) {
+      standingsEl.textContent = `Phase: ${data.phase} | Pot: ${data.pot} | ${data.standings}`;
+      logsEl.textContent = (data.logs || []).join('\n');
+      renderCards(myCardsEl, data.you_cards || [], true);
+      renderCards(boardCardsEl, data.board_cards || [], true);
+      renderPlayers(data);
+      Object.values(actionButtons).forEach((btn) => btn.disabled = true);
+
+      if (data.event === 'action_required' && data.prompt) {
+        promptEl.textContent = `${data.prompt.player} 차례 - to_call: ${data.prompt.to_call}, allowed: ${data.prompt.allowed.join(', ')}`;
+        (data.prompt.allowed || []).forEach((a) => {
+          if (actionButtons[a]) actionButtons[a].disabled = false;
+        });
+      } else if (data.event === 'hand_finished') {
+        promptEl.textContent = `핸드 종료: winners=${(data.winners || []).join(', ')} | Next Round 클릭`;
+        actionButtons.next_round.disabled = false;
+      } else if (data.event === 'error') {
+        promptEl.textContent = `에러: ${data.message || 'invalid action'}`;
+        if (data.prompt && data.prompt.allowed) {
+          data.prompt.allowed.forEach((a) => {
+            if (actionButtons[a]) actionButtons[a].disabled = false;
+          });
+        }
+      } else {
+        promptEl.textContent = '';
+      }
+    }
+  </script>
+</body>
+</html>
