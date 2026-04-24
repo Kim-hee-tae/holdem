@@ -49,12 +49,18 @@ class Deck:
     def __init__(self, seed: int | None = None) -> None:
         self._rng = random.Random(seed)
         self.cards = [Card(rank, suit) for suit in SUITS for rank in RANK_ORDER]
+        self._dealt: set[tuple[str, str]] = set()
 
     def shuffle(self) -> None:
         self._rng.shuffle(self.cards)
 
     def deal(self, n: int) -> list[Card]:
         dealt, self.cards = self.cards[:n], self.cards[n:]
+        for c in dealt:
+            key = (c.rank, c.suit)
+            if key in self._dealt:
+                raise RuntimeError(f"Duplicate card dealt: {c}")
+            self._dealt.add(key)
         return dealt
 
 
@@ -163,6 +169,7 @@ class TexasHoldemGame:
                 if p.chips > 0:
                     p.hole_cards.extend(self.deck.deal(1))
 
+        self._assert_unique_cards_or_raise()
         self._post_blinds()
 
     def _post_blinds(self) -> None:
@@ -284,17 +291,29 @@ class TexasHoldemGame:
     def deal_flop(self) -> None:
         _ = self.deck.deal(1)
         self.board.extend(self.deck.deal(3))
+        self._assert_unique_cards_or_raise()
         self._log(f"Flop: {self.format_cards(self.board)}")
 
     def deal_turn(self) -> None:
         _ = self.deck.deal(1)
         self.board.extend(self.deck.deal(1))
+        self._assert_unique_cards_or_raise()
         self._log(f"Turn: {self.format_cards(self.board)}")
 
     def deal_river(self) -> None:
         _ = self.deck.deal(1)
         self.board.extend(self.deck.deal(1))
+        self._assert_unique_cards_or_raise()
         self._log(f"River: {self.format_cards(self.board)}")
+
+    def _assert_unique_cards_or_raise(self) -> None:
+        seen: set[tuple[str, str]] = set()
+        all_cards = [c for p in self.players for c in p.hole_cards] + self.board
+        for c in all_cards:
+            key = (c.rank, c.suit)
+            if key in seen:
+                raise RuntimeError(f"Duplicate card detected in hand state: {c}")
+            seen.add(key)
 
     def showdown_or_award(self) -> list[Player]:
         remain = [p for p in self.players if not p.folded]

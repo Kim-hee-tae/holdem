@@ -105,3 +105,12 @@ def test_showdown_logs_reveal_all_hole_cards():
     joined = "\n".join(game.logs)
     assert "Hole cards reveal:" in joined
     assert "A:" in joined and "B:" in joined
+
+
+def test_no_duplicate_cards_in_multiple_hands():
+    game = TexasHoldemGame(["A", "B", "C", "D"], seed=123)
+    for _ in range(50):
+        game.play_hand()
+        cards = [c for p in game.players for c in p.hole_cards] + game.board
+        serial = [(c.rank, c.suit) for c in cards]
+        assert len(serial) == len(set(serial))
