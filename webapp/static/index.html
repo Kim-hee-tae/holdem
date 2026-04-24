@@ -37,11 +37,11 @@
     <div id="prompt"></div>
 
     <div class="row">
-      <button onclick="sendAction('fold')">Fold</button>
-      <button onclick="sendAction('check')">Check</button>
-      <button onclick="sendAction('call')">Call</button>
-      <button onclick="sendAction('raise')">Raise</button>
-      <button onclick="sendAction('next_round')">Next Round</button>
+      <button id="btn-fold" onclick="sendAction('fold')">Fold</button>
+      <button id="btn-check" onclick="sendAction('check')">Check</button>
+      <button id="btn-call" onclick="sendAction('call')">Call</button>
+      <button id="btn-raise" onclick="sendAction('raise')">Raise</button>
+      <button id="btn-next" onclick="sendAction('next_round')">Next Round</button>
     </div>
 
     <div class="info" id="standings"></div>
@@ -71,6 +71,13 @@
     const myCardsEl = document.getElementById('myCards');
     const boardCardsEl = document.getElementById('boardCards');
     const playersAreaEl = document.getElementById('playersArea');
+    const actionButtons = {
+      fold: document.getElementById('btn-fold'),
+      check: document.getElementById('btn-check'),
+      call: document.getElementById('btn-call'),
+      raise: document.getElementById('btn-raise'),
+      next_round: document.getElementById('btn-next'),
+    };
 
     const SUIT = { S: '♠', H: '♥', D: '♦', C: '♣' };
     const RED = new Set(['H', 'D']);
@@ -161,11 +168,23 @@
       renderCards(myCardsEl, data.you_cards || [], true);
       renderCards(boardCardsEl, data.board_cards || [], true);
       renderPlayers(data);
+      Object.values(actionButtons).forEach((btn) => btn.disabled = true);
 
       if (data.event === 'action_required' && data.prompt) {
         promptEl.textContent = `${data.prompt.player} 차례 - to_call: ${data.prompt.to_call}, allowed: ${data.prompt.allowed.join(', ')}`;
+        (data.prompt.allowed || []).forEach((a) => {
+          if (actionButtons[a]) actionButtons[a].disabled = false;
+        });
       } else if (data.event === 'hand_finished') {
         promptEl.textContent = `핸드 종료: winners=${(data.winners || []).join(', ')} | Next Round 클릭`;
+        actionButtons.next_round.disabled = false;
+      } else if (data.event === 'error') {
+        promptEl.textContent = `에러: ${data.message || 'invalid action'}`;
+        if (data.prompt && data.prompt.allowed) {
+          data.prompt.allowed.forEach((a) => {
+            if (actionButtons[a]) actionButtons[a].disabled = false;
+          });
+        }
       } else {
         promptEl.textContent = '';
       }

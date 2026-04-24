@@ -346,7 +346,8 @@ class TexasHoldemGame:
         all_winners: list[Player] = []
         total_distributed = 0
 
-        for level in levels:
+        side_pot_index = 0
+        for i, level in enumerate(levels):
             eligible_for_pot = [p for p in self.players if contributions[p.name] >= level]
             pot_amount = (level - prev) * len(eligible_for_pot)
             prev = level
@@ -360,13 +361,18 @@ class TexasHoldemGame:
             best = max(score_by_name[p.name] for p in contenders)
             winners = [p for p in contenders if score_by_name[p.name] == best]
             share, extra = divmod(pot_amount, len(winners))
-            for i, w in enumerate(winners):
-                w.chips += share + (1 if i < extra else 0)
+            for w_idx, w in enumerate(winners):
+                w.chips += share + (1 if w_idx < extra else 0)
                 all_winners.append(w)
             total_distributed += pot_amount
-            self._log(
-                f"Side pot {pot_amount}: {', '.join(w.name for w in winners)} win."
-            )
+            if len(levels) == 1 and i == 0:
+                pot_label = "Main pot"
+            elif i == 0:
+                pot_label = "Main pot"
+            else:
+                side_pot_index += 1
+                pot_label = f"Side pot {side_pot_index}"
+            self._log(f"{pot_label} {pot_amount}: {', '.join(w.name for w in winners)} win.")
 
         self._log(f"Total pot distributed: {total_distributed}.")
         self.pot = 0

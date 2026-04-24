@@ -114,3 +114,18 @@ def test_no_duplicate_cards_in_multiple_hands():
         cards = [c for p in game.players for c in p.hole_cards] + game.board
         serial = [(c.rank, c.suit) for c in cards]
         assert len(serial) == len(set(serial))
+
+
+def test_pot_label_is_main_pot_when_no_all_in_side_levels():
+    game = TexasHoldemGame(["A", "B"], seed=9)
+    a, b = game.players
+    for p in game.players:
+        p.reset_for_hand()
+    a.hand_contribution = 80
+    b.hand_contribution = 80
+    game.pot = 160
+    scored = [(a, (1, (14, 10, 9, 8))), (b, (0, (13, 12, 11, 9, 8)))]
+    game._distribute_side_pots(scored)
+    joined = "\n".join(game.logs)
+    assert "Main pot 160" in joined
+    assert "Side pot" not in joined

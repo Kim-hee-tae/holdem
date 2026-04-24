@@ -183,6 +183,16 @@ class TurnEngine:
         if idx not in self.round_waiting:
             return self.snapshot("error", message="Human action not expected now")
 
+        player = self.game.players[idx]
+        to_call = max(0, self.game.current_bet - player.current_bet)
+        allowed = {"fold", "call", "raise"} if to_call > 0 else {"check", "raise"}
+        if action not in allowed:
+            return self.snapshot(
+                "error",
+                message=f"Invalid action '{action}' for to_call={to_call}. Allowed={sorted(allowed)}",
+                prompt={"player": player.name, "to_call": to_call, "allowed": sorted(allowed)},
+            )
+
         raise_target = raise_to if raise_to is not None else self.game.current_bet + self.game.config.big_blind
         self._apply_action_indexed(idx, action, raise_target)
         self.last_prompt = None
