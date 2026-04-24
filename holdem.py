@@ -1,19 +1,21 @@
-"""Simple Texas Hold'em engine and CLI demo.
+"""Texas Hold'em engine with betting rounds, blinds, cash/tournament modes, and a small GUI.
 
-Run:
-    python holdem.py
+Examples:
+    python holdem.py --mode tournament --players 4 --hands 10
+    python holdem.py --gui
 """
 
 from __future__ import annotations
 
-from dataclasses import dataclass
+import argparse
+from collections import Counter
+from dataclasses import dataclass, field
 from itertools import combinations
 import random
-from collections import Counter
+from typing import Literal
 
 RANK_ORDER = "23456789TJQKA"
 RANK_TO_VALUE = {r: i + 2 for i, r in enumerate(RANK_ORDER)}
-VALUE_TO_RANK = {v: r for r, v in RANK_TO_VALUE.items()}
 SUITS = ("S", "H", "D", "C")
 HAND_NAMES = {
     8: "Straight Flush",
@@ -26,6 +28,8 @@ HAND_NAMES = {
     1: "One Pair",
     0: "High Card",
 }
+
+Action = Literal["fold", "check", "call", "raise"]
 
 
 @dataclass(frozen=True, order=True)
@@ -50,10 +54,296 @@ class Deck:
         self._rng.shuffle(self.cards)
 
     def deal(self, n: int) -> list[Card]:
-        if n > len(self.cards):
-            raise ValueError("Not enough cards in deck")
         dealt, self.cards = self.cards[:n], self.cards[n:]
         return dealt
+
+
+@dataclass
+class Player:
+    name: str
+    chips: int
+    hole_cards: list[Card] = field(default_factory=list)
+    folded: bool = False
+    all_in: bool = False
+    current_bet: int = 0
+
+    def reset_for_hand(self) -> None:
+        self.hole_cards = []
+        self.folded = False
+        self.all_in = False
+        self.current_bet = 0
+
+    @property
+    def active(self) -> bool:
+        return not self.folded and (self.chips > 0 or self.all_in)
+
+
+@dataclass
+class GameConfig:
+    small_blind: int = 5
+    big_blind: int = 10
+    starting_stack: int = 500
+    mode: Literal["cash", "tournament"] = "cash"
+    rebuy_stack: int = 500
+
+
+class TexasHoldemGame:
+    def __init__(self, player_names: list[str], config: GameConfig | None = None, seed: int | None = None) -> None:
+        if len(player_names) < 2:
+            raise ValueError("At least 2 players are required")
+        self.config = config or GameConfig()
+        self.players = [Player(name=n, chips=self.config.starting_stack) for n in player_names]
+        self.dealer_idx = 0
+        self.pot = 0
+        self.board: list[Card] = []
+        self.current_bet = 0
+        self.deck = Deck(seed=seed)
+        self.rng = random.Random(seed)
+        self.hand_no = 0
+        self.logs: list[str] = []
+
+    @staticmethod
+    def format_cards(cards: list[Card]) -> str:
+        return " ".join(str(c) for c in cards)
+
+    def _log(self, msg: str) -> None:
+        self.logs.append(msg)
+
+    def living_players(self) -> list[Player]:
+        return [p for p in self.players if p.chips > 0 or p.all_in]
+
+    def rotate_dealer(self) -> None:
+        self.dealer_idx = (self.dealer_idx + 1) % len(self.players)
+
+    def _next_index(self, idx: int) -> int:
+        return (idx + 1) % len(self.players)
+
+    def _collect_bet(self, player: Player, amount: int) -> int:
+        actual = min(amount, player.chips)
+        player.chips -= actual
+        player.current_bet += actual
+        self.pot += actual
+        if player.chips == 0:
+            player.all_in = True
+        return actual
+
+    def _reset_bets(self) -> None:
+        for p in self.players:
+            p.current_bet = 0
+        self.current_bet = 0
+
+    def start_hand(self) -> None:
+        self.hand_no += 1
+        self.logs = [f"=== Hand {self.hand_no} ==="]
+        self.board = []
+        self.pot = 0
+        self.deck = Deck(seed=self.rng.randint(0, 10**9))
+        self.deck.shuffle()
+        for p in self.players:
+            p.reset_for_hand()
+
+        if self.config.mode == "cash":
+            for p in self.players:
+                if p.chips == 0:
+                    p.chips = self.config.rebuy_stack
+                    self._log(f"{p.name} rebuys to {p.chips} chips.")
+
+        for _ in range(2):
+            for p in self.players:
+                if p.chips > 0:
+                    p.hole_cards.extend(self.deck.deal(1))
+
+        self._post_blinds()
+
+    def _post_blinds(self) -> None:
+        sb_idx = self._next_index(self.dealer_idx)
+        bb_idx = self._next_index(sb_idx)
+        sb = self.players[sb_idx]
+        bb = self.players[bb_idx]
+        sb_paid = self._collect_bet(sb, self.config.small_blind)
+        bb_paid = self._collect_bet(bb, self.config.big_blind)
+        self.current_bet = max(sb.current_bet, bb.current_bet)
+        self._log(f"{sb.name} posts SB {sb_paid}.")
+        self._log(f"{bb.name} posts BB {bb_paid}.")
+
+    def _active_for_action(self) -> list[Player]:
+        return [p for p in self.players if not p.folded and not p.all_in and p.chips >= 0]
+
+    def _can_continue(self) -> bool:
+        in_hand = [p for p in self.players if not p.folded and (p.chips > 0 or p.all_in)]
+        return len(in_hand) > 1
+
+    def decide_action(self, player: Player) -> tuple[Action, int]:
+        to_call = max(0, self.current_bet - player.current_bet)
+        if to_call == 0:
+            if player.chips > self.config.big_blind and self.rng.random() < 0.2:
+                raise_to = self.current_bet + self.config.big_blind
+                return "raise", raise_to
+            return "check", 0
+
+        if player.chips <= to_call:
+            return "call", 0
+
+        roll = self.rng.random()
+        if roll < 0.15:
+            return "fold", 0
+        if roll < 0.75:
+            return "call", 0
+        raise_to = self.current_bet + self.config.big_blind
+        return "raise", raise_to
+
+    def apply_action(self, player: Player, action: Action, raise_to: int = 0) -> None:
+        to_call = max(0, self.current_bet - player.current_bet)
+        if action == "fold":
+            player.folded = True
+            self._log(f"{player.name} folds.")
+            return
+
+        if action == "check":
+            self._log(f"{player.name} checks.")
+            return
+
+        if action == "call":
+            paid = self._collect_bet(player, to_call)
+            self._log(f"{player.name} calls {paid}.")
+            return
+
+        if action == "raise":
+            target = max(raise_to, self.current_bet + self.config.big_blind)
+            need_total = max(0, target - player.current_bet)
+            paid = self._collect_bet(player, need_total)
+            if player.current_bet > self.current_bet:
+                self.current_bet = player.current_bet
+            self._log(f"{player.name} raises to {player.current_bet} (added {paid}).")
+            return
+
+        raise ValueError(f"Unknown action: {action}")
+
+    def betting_round(self, start_idx: int) -> None:
+        n = len(self.players)
+        acted = 0
+        idx = start_idx
+        while acted < n * 2:
+            if not self._can_continue():
+                return
+
+            p = self.players[idx]
+            if not p.folded and not p.all_in:
+                need = self.current_bet - p.current_bet
+                everyone_matched = all(
+                    x.folded or x.all_in or x.current_bet == self.current_bet
+                    for x in self.players
+                )
+                if everyone_matched and need == 0 and acted >= n:
+                    break
+                action, raise_to = self.decide_action(p)
+                self.apply_action(p, action, raise_to)
+            idx = (idx + 1) % n
+            acted += 1
+
+        # If someone raised near the end, ensure everyone gets chance to match.
+        unsettled = any(
+            not x.folded and not x.all_in and x.current_bet != self.current_bet
+            for x in self.players
+        )
+        if unsettled and self._can_continue():
+            self.betting_round(idx)
+
+    def deal_flop(self) -> None:
+        _ = self.deck.deal(1)
+        self.board.extend(self.deck.deal(3))
+        self._log(f"Flop: {self.format_cards(self.board)}")
+
+    def deal_turn(self) -> None:
+        _ = self.deck.deal(1)
+        self.board.extend(self.deck.deal(1))
+        self._log(f"Turn: {self.format_cards(self.board)}")
+
+    def deal_river(self) -> None:
+        _ = self.deck.deal(1)
+        self.board.extend(self.deck.deal(1))
+        self._log(f"River: {self.format_cards(self.board)}")
+
+    def showdown_or_award(self) -> list[Player]:
+        remain = [p for p in self.players if not p.folded]
+        if len(remain) == 1:
+            winner = remain[0]
+            winner.chips += self.pot
+            self._log(f"{winner.name} wins uncontested pot {self.pot}.")
+            self.pot = 0
+            return [winner]
+
+        scored: list[tuple[Player, tuple[int, tuple[int, ...]]]] = []
+        for p in remain:
+            score, _ = best_hand(p.hole_cards + self.board)
+            scored.append((p, score))
+            self._log(f"{p.name}: {self.format_cards(p.hole_cards)} -> {HAND_NAMES[score[0]]}")
+
+        best = max(score for _, score in scored)
+        winners = [p for p, sc in scored if sc == best]
+        share, extra = divmod(self.pot, len(winners))
+        for i, w in enumerate(winners):
+            w.chips += share + (1 if i < extra else 0)
+        self._log(f"Winners: {', '.join(w.name for w in winners)} collect {self.pot}.")
+        self.pot = 0
+        return winners
+
+    def cleanup_tournament_players(self) -> None:
+        if self.config.mode != "tournament":
+            return
+        # Keep seated players but mark elimination in log.
+        for p in self.players:
+            if p.chips == 0:
+                self._log(f"{p.name} is eliminated.")
+
+    def play_hand(self) -> list[Player]:
+        self.start_hand()
+        utg = self._next_index(self._next_index(self._next_index(self.dealer_idx)))
+        self._log("-- Preflop betting --")
+        self.betting_round(utg)
+        if not self._can_continue():
+            winners = self.showdown_or_award()
+            self.rotate_dealer()
+            self.cleanup_tournament_players()
+            return winners
+
+        self._reset_bets()
+        self.deal_flop()
+        self._log("-- Flop betting --")
+        self.betting_round(self._next_index(self.dealer_idx))
+        if not self._can_continue():
+            winners = self.showdown_or_award()
+            self.rotate_dealer()
+            self.cleanup_tournament_players()
+            return winners
+
+        self._reset_bets()
+        self.deal_turn()
+        self._log("-- Turn betting --")
+        self.betting_round(self._next_index(self.dealer_idx))
+        if not self._can_continue():
+            winners = self.showdown_or_award()
+            self.rotate_dealer()
+            self.cleanup_tournament_players()
+            return winners
+
+        self._reset_bets()
+        self.deal_river()
+        self._log("-- River betting --")
+        self.betting_round(self._next_index(self.dealer_idx))
+        winners = self.showdown_or_award()
+        self.rotate_dealer()
+        self.cleanup_tournament_players()
+        return winners
+
+    def session_finished(self) -> bool:
+        if self.config.mode != "tournament":
+            return False
+        alive = [p for p in self.players if p.chips > 0]
+        return len(alive) <= 1
+
+    def standings(self) -> str:
+        return " | ".join(f"{p.name}:{p.chips}" for p in self.players)
 
 
 def _straight_high(values: list[int]) -> int | None:
@@ -81,37 +371,29 @@ def evaluate_five(cards: list[Card]) -> tuple[int, tuple[int, ...]]:
 
     if is_flush and straight_high is not None:
         return (8, (straight_high,))
-
     if groups[0][1] == 4:
         quad = groups[0][0]
         kicker = max(v for v in values if v != quad)
         return (7, (quad, kicker))
-
     if groups[0][1] == 3 and groups[1][1] == 2:
         return (6, (groups[0][0], groups[1][0]))
-
     if is_flush:
         return (5, tuple(values))
-
     if straight_high is not None:
         return (4, (straight_high,))
-
     if groups[0][1] == 3:
         trips = groups[0][0]
         kickers = sorted((v for v in values if v != trips), reverse=True)
         return (3, (trips, *kickers))
-
     if groups[0][1] == 2 and groups[1][1] == 2:
         hi_pair = max(groups[0][0], groups[1][0])
         lo_pair = min(groups[0][0], groups[1][0])
         kicker = max(v for v in values if v != hi_pair and v != lo_pair)
         return (2, (hi_pair, lo_pair, kicker))
-
     if groups[0][1] == 2:
         pair = groups[0][0]
         kickers = sorted((v for v in values if v != pair), reverse=True)
         return (1, (pair, *kickers))
-
     return (0, tuple(values))
 
 
@@ -131,54 +413,68 @@ def best_hand(seven_cards: list[Card]) -> tuple[tuple[int, tuple[int, ...]], lis
     return best_score, best_combo
 
 
-def format_cards(cards: list[Card]) -> str:
-    return " ".join(str(c) for c in cards)
+def simulate_session(mode: Literal["cash", "tournament"], players: int, hands: int, seed: int | None = None) -> str:
+    names = [f"P{i}" for i in range(1, players + 1)]
+    config = GameConfig(mode=mode)
+    game = TexasHoldemGame(names, config=config, seed=seed)
+    session_logs = [f"Mode={mode}"]
+    for _ in range(hands):
+        game.play_hand()
+        session_logs.extend(game.logs)
+        session_logs.append(f"Standings: {game.standings()}")
+        if game.session_finished():
+            break
+    if mode == "tournament":
+        alive = [p.name for p in game.players if p.chips > 0]
+        if len(alive) == 1:
+            session_logs.append(f"Champion: {alive[0]}")
+    return "\n".join(session_logs)
 
 
-def describe_score(score: tuple[int, tuple[int, ...]]) -> str:
-    category = HAND_NAMES[score[0]]
-    return category
+def launch_gui() -> None:
+    import tkinter as tk
+    from tkinter import ttk
+
+    game = TexasHoldemGame(["You", "Bot1", "Bot2", "Bot3"], config=GameConfig(mode="cash"))
+
+    root = tk.Tk()
+    root.title("Texas Hold'em Demo")
+
+    text = tk.Text(root, width=90, height=28)
+    text.pack(padx=8, pady=8)
+
+    def play_hand_ui() -> None:
+        game.play_hand()
+        text.delete("1.0", tk.END)
+        text.insert(tk.END, "\n".join(game.logs) + "\n")
+        text.insert(tk.END, f"\nStandings: {game.standings()}\n")
+
+    btn_frame = ttk.Frame(root)
+    btn_frame.pack(pady=6)
+    ttk.Button(btn_frame, text="Play Next Hand", command=play_hand_ui).pack(side=tk.LEFT, padx=4)
+    ttk.Button(btn_frame, text="Quit", command=root.destroy).pack(side=tk.LEFT, padx=4)
+
+    play_hand_ui()
+    root.mainloop()
 
 
-def play_demo(num_bots: int = 1, seed: int | None = None) -> None:
-    if not (1 <= num_bots <= 8):
-        raise ValueError("num_bots must be between 1 and 8")
+def parse_args() -> argparse.Namespace:
+    parser = argparse.ArgumentParser(description="Texas Hold'em simulation")
+    parser.add_argument("--mode", choices=["cash", "tournament"], default="cash")
+    parser.add_argument("--players", type=int, default=4)
+    parser.add_argument("--hands", type=int, default=5)
+    parser.add_argument("--seed", type=int, default=None)
+    parser.add_argument("--gui", action="store_true")
+    return parser.parse_args()
 
-    players = ["You"] + [f"Bot{i}" for i in range(1, num_bots + 1)]
-    deck = Deck(seed=seed)
-    deck.shuffle()
 
-    hole_cards = {p: deck.deal(2) for p in players}
-    _ = deck.deal(1)  # burn
-    flop = deck.deal(3)
-    _ = deck.deal(1)  # burn
-    turn = deck.deal(1)
-    _ = deck.deal(1)  # burn
-    river = deck.deal(1)
-    board = flop + turn + river
-
-    print("=== Texas Hold'em Demo ===")
-    print(f"Your cards: {format_cards(hole_cards['You'])}")
-    print(f"Board: {format_cards(board)}")
-
-    results = {}
-    for p in players:
-        score, combo = best_hand(hole_cards[p] + board)
-        results[p] = (score, combo)
-
-    top = max(results.values(), key=lambda x: x[0])[0]
-    winners = [p for p, (score, _) in results.items() if score == top]
-
-    print("\n--- Showdown ---")
-    for p in players:
-        score, combo = results[p]
-        print(
-            f"{p:>5}: {format_cards(hole_cards[p])} -> {describe_score(score)} "
-            f"({format_cards(combo)})"
-        )
-
-    print("\nWinner(s):", ", ".join(winners), f"with {describe_score(top)}")
+def main() -> None:
+    args = parse_args()
+    if args.gui:
+        launch_gui()
+        return
+    print(simulate_session(mode=args.mode, players=args.players, hands=args.hands, seed=args.seed))
 
 
 if __name__ == "__main__":
-    play_demo(num_bots=3)
+    main()
