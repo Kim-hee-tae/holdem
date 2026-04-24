@@ -66,12 +66,14 @@ class Player:
     folded: bool = False
     all_in: bool = False
     current_bet: int = 0
+    hand_contribution: int = 0
 
     def reset_for_hand(self) -> None:
         self.hole_cards = []
         self.folded = False
         self.all_in = False
         self.current_bet = 0
+        self.hand_contribution = 0
 
     @property
     def active(self) -> bool:
@@ -88,7 +90,13 @@ class GameConfig:
 
 
 class TexasHoldemGame:
-    def __init__(self, player_names: list[str], config: GameConfig | None = None, seed: int | None = None) -> None:
+    def __init__(
+        self,
+        player_names: list[str],
+        config: GameConfig | None = None,
+        seed: int | None = None,
+        human_player: str | None = None,
+    ) -> None:
         if len(player_names) < 2:
             raise ValueError("At least 2 players are required")
         self.config = config or GameConfig()
@@ -101,6 +109,7 @@ class TexasHoldemGame:
         self.rng = random.Random(seed)
         self.hand_no = 0
         self.logs: list[str] = []
+        self.human_player = human_player
 
     @staticmethod
     def format_cards(cards: list[Card]) -> str:
@@ -122,6 +131,7 @@ class TexasHoldemGame:
         actual = min(amount, player.chips)
         player.chips -= actual
         player.current_bet += actual
+        player.hand_contribution += actual
         self.pot += actual
         if player.chips == 0:
             player.all_in = True
@@ -175,6 +185,8 @@ class TexasHoldemGame:
 
     def decide_action(self, player: Player) -> tuple[Action, int]:
         to_call = max(0, self.current_bet - player.current_bet)
+        if self.human_player is not None and player.name == self.human_player:
+            return self._prompt_human_action(player, to_call)
         if to_call == 0:
             if player.chips > self.config.big_blind and self.rng.random() < 0.2:
                 raise_to = self.current_bet + self.config.big_blind
@@ -191,6 +203,26 @@ class TexasHoldemGame:
             return "call", 0
         raise_to = self.current_bet + self.config.big_blind
         return "raise", raise_to
+
+    def _prompt_human_action(self, player: Player, to_call: int) -> tuple[Action, int]:
+        prompt = (
+            f"[{player.name}] chips={player.chips} to_call={to_call} "
+            "action(fold/check/call/raise): "
+        )
+        while True:
+            raw = input(prompt).strip().lower()
+            if raw in {"fold", "f"}:
+                return "fold", 0
+            if raw in {"check", "k"} and to_call == 0:
+                return "check", 0
+            if raw in {"call", "c"}:
+                return "call", 0
+            if raw.startswith("raise") or raw.startswith("r"):
+                parts = raw.split()
+                if len(parts) == 2 and parts[1].isdigit():
+                    return "raise", int(parts[1])
+                return "raise", self.current_bet + self.config.big_blind
+            print("Invalid action. Use fold/check/call/raise [amount].")
 
     def apply_action(self, player: Player, action: Action, raise_to: int = 0) -> None:
         to_call = max(0, self.current_bet - player.current_bet)
@@ -281,12 +313,50 @@ class TexasHoldemGame:
 
         best = max(score for _, score in scored)
         winners = [p for p, sc in scored if sc == best]
-        share, extra = divmod(self.pot, len(winners))
-        for i, w in enumerate(winners):
-            w.chips += share + (1 if i < extra else 0)
-        self._log(f"Winners: {', '.join(w.name for w in winners)} collect {self.pot}.")
+        side_pot_winners = self._distribute_side_pots(scored)
+        return side_pot_winners
+
+    def _distribute_side_pots(
+        self, scored: list[tuple[Player, tuple[int, tuple[int, ...]]]]
+    ) -> list[Player]:
+        score_by_name = {p.name: score for p, score in scored}
+        contributions = {p.name: p.hand_contribution for p in self.players}
+        levels = sorted({amt for amt in contributions.values() if amt > 0})
+        prev = 0
+        all_winners: list[Player] = []
+        total_distributed = 0
+
+        for level in levels:
+            eligible_for_pot = [p for p in self.players if contributions[p.name] >= level]
+            pot_amount = (level - prev) * len(eligible_for_pot)
+            prev = level
+            if pot_amount <= 0:
+                continue
+
+            contenders = [p for p in eligible_for_pot if not p.folded and p.name in score_by_name]
+            if not contenders:
+                continue
+
+            best = max(score_by_name[p.name] for p in contenders)
+            winners = [p for p in contenders if score_by_name[p.name] == best]
+            share, extra = divmod(pot_amount, len(winners))
+            for i, w in enumerate(winners):
+                w.chips += share + (1 if i < extra else 0)
+                all_winners.append(w)
+            total_distributed += pot_amount
+            self._log(
+                f"Side pot {pot_amount}: {', '.join(w.name for w in winners)} win."
+            )
+
+        self._log(f"Total pot distributed: {total_distributed}.")
         self.pot = 0
-        return winners
+        dedup = []
+        seen = set()
+        for w in all_winners:
+            if w.name not in seen:
+                dedup.append(w)
+                seen.add(w.name)
+        return dedup
 
     def cleanup_tournament_players(self) -> None:
         if self.config.mode != "tournament":
@@ -413,10 +483,17 @@ def best_hand(seven_cards: list[Card]) -> tuple[tuple[int, tuple[int, ...]], lis
     return best_score, best_combo
 
 
-def simulate_session(mode: Literal["cash", "tournament"], players: int, hands: int, seed: int | None = None) -> str:
+def simulate_session(
+    mode: Literal["cash", "tournament"],
+    players: int,
+    hands: int,
+    seed: int | None = None,
+    interactive: bool = False,
+) -> str:
     names = [f"P{i}" for i in range(1, players + 1)]
     config = GameConfig(mode=mode)
-    game = TexasHoldemGame(names, config=config, seed=seed)
+    human = names[0] if interactive else None
+    game = TexasHoldemGame(names, config=config, seed=seed, human_player=human)
     session_logs = [f"Mode={mode}"]
     for _ in range(hands):
         game.play_hand()
@@ -465,15 +542,91 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--hands", type=int, default=5)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--gui", action="store_true")
+    parser.add_argument("--interactive", action="store_true")
+    parser.add_argument("--web", action="store_true")
     return parser.parse_args()
+
+
+def launch_web_gui(seed: int | None = None) -> None:
+    try:
+        from flask import Flask, redirect, render_template_string, request, url_for
+    except ModuleNotFoundError as exc:
+        raise RuntimeError(
+            "Flask is required for --web mode. Install with: pip install flask"
+        ) from exc
+
+    app = Flask(__name__)
+    game = TexasHoldemGame(["You", "Bot1", "Bot2", "Bot3"], seed=seed, human_player="You")
+
+    template = """
+    <html><body>
+    <h2>Texas Hold'em Web GUI</h2>
+    <p>현재 핸드 단위 실행이며, 콘솔 없이 웹에서 액션 스타일을 선택해 진행할 수 있습니다.</p>
+    <form method="post" action="/play">
+      <label>행동 기본값:
+      <select name="style">
+        <option value="call">Call/Check 중심</option>
+        <option value="raise">Raise 중심</option>
+        <option value="fold">Fold 중심</option>
+      </select></label>
+      <button type="submit">다음 핸드 실행</button>
+    </form>
+    <pre>{{logs}}</pre>
+    <p><b>Standings:</b> {{standings}}</p>
+    </body></html>
+    """
+
+    @app.get("/")
+    def index():
+        return render_template_string(template, logs="웹 GUI 준비 완료", standings=game.standings())
+
+    @app.post("/play")
+    def play():
+        style = request.form.get("style", "call")
+        original = game._prompt_human_action
+
+        def scripted_prompt(player: Player, to_call: int) -> tuple[Action, int]:
+            if style == "fold" and to_call > 0:
+                return "fold", 0
+            if style == "raise" and player.chips > game.current_bet + game.config.big_blind:
+                return "raise", game.current_bet + game.config.big_blind
+            if to_call == 0:
+                return "check", 0
+            return "call", 0
+
+        game._prompt_human_action = scripted_prompt  # type: ignore[assignment]
+        game.play_hand()
+        game._prompt_human_action = original  # type: ignore[assignment]
+        return redirect(url_for("state"))
+
+    @app.get("/state")
+    def state():
+        return render_template_string(
+            template,
+            logs="\\n".join(game.logs),
+            standings=game.standings(),
+        )
+
+    app.run(host="0.0.0.0", port=8000, debug=False)
 
 
 def main() -> None:
     args = parse_args()
+    if args.web:
+        launch_web_gui(seed=args.seed)
+        return
     if args.gui:
         launch_gui()
         return
-    print(simulate_session(mode=args.mode, players=args.players, hands=args.hands, seed=args.seed))
+    print(
+        simulate_session(
+            mode=args.mode,
+            players=args.players,
+            hands=args.hands,
+            seed=args.seed,
+            interactive=args.interactive,
+        )
+    )
 
 
 if __name__ == "__main__":

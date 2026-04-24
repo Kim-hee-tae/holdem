@@ -70,3 +70,27 @@ def test_tournament_finishes_with_single_player():
 
     alive = [p for p in game.players if p.chips > 0]
     assert len(alive) == 1
+
+
+def test_side_pot_distribution_with_all_in():
+    game = TexasHoldemGame(["A", "B", "C"], seed=3)
+    a, b, c = game.players
+    for p in game.players:
+        p.reset_for_hand()
+
+    # Contributions: A=50(all-in), B=100, C=100 (C folded)
+    a.hand_contribution = 50
+    b.hand_contribution = 100
+    c.hand_contribution = 100
+    game.pot = 250
+    c.folded = True
+    # A has stronger hand than B -> should win main pot 150, B gets side pot 100
+    scored = [(a, (2, (14, 13, 12))), (b, (1, (10, 9, 8, 7)))]
+    start_a, start_b = a.chips, b.chips
+
+    winners = game._distribute_side_pots(scored)
+
+    assert a.chips == start_a + 150
+    assert b.chips == start_b + 100
+    assert game.pot == 0
+    assert {w.name for w in winners} == {"A", "B"}
